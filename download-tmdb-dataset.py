@@ -50,7 +50,7 @@ async def main():
     tmdb = aioTMDb()
 
     # Earliest movie release date in TMDb is 1874-12-09
-    start_date = date(2025, 1, 1)
+    start_date = date(1874, 1, 1)
     results = []
     coros = []
     
@@ -58,10 +58,15 @@ async def main():
         # Check the number of movies released in the date range
         # and reduce the date range until it's less than 500
         end_date = date.today()
-        while (movies := await tmdb.discover().movie(
-            sort_by="primary_release_date.asc",
-            primary_release_date__gte=start_date.isoformat(),
-            primary_release_date__lte=end_date.isoformat())).total_pages > 500:
+        while True:
+
+            movies = await tmdb.discover().movie(
+                sort_by="primary_release_date.asc",
+                primary_release_date__gte=start_date.isoformat(),
+                primary_release_date__lte=end_date.isoformat())
+            
+            if movies.total_pages and movies.total_pages < 500:
+                break
 
             # Reduce the date range by half
             delta = (end_date - start_date) // 2
@@ -70,7 +75,7 @@ async def main():
         results.append(movies)
         coros.extend([
             discover_movies(tmdb, start_date, end_date, page)
-            for page in range(2, movies.total_pages + 1)
+            for page in range(2, (movies.total_pages or 1) + 1)
         ])
         start_date = end_date
 
