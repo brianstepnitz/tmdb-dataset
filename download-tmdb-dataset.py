@@ -1,10 +1,16 @@
 import asyncio
-from datetime import date, timedelta
-from themoviedb import aioTMDb, utils
+import aiohttp
+from datetime import date
 import os
 import json
 
-async def discover_movies(tmdb, start_date: date, end_date: date, page: int = 1):
+url = "https://api.themoviedb.org/3/discover/movie"
+headers = {
+    "Accept": "application/json",
+    "Authorization": "Bearer " + os.getenv("TMDB_TOKEN", "")
+}
+
+async def discover_movies(session, start_date: date, end_date: date, page: int = 1):
     """
     Discover movies released between start_date and end_date.
     """
@@ -15,12 +21,14 @@ async def discover_movies(tmdb, start_date: date, end_date: date, page: int = 1)
     wait_secs = 0
     while movies is None:
         try:
-            movies = await tmdb.discover().movie(
-                sort_by="primary_release_date.asc",
-                primary_release_date__gte=start_date.isoformat(),
-                primary_release_date__lte=end_date.isoformat(),
-                page=page
-            )
+            params = {
+                "sort_by": "primary_release_date.asc",
+                "primary_release_date.gte": start_date.isoformat(),
+                "primary_release_date.lte": end_date.isoformat(),
+                "page": page
+            }
+            async with session.get(url, params=params, headers=headers) as response:
+                movies = await response.json()
         except Exception as e:
             print(e)
             wait_secs += 1
@@ -42,30 +50,31 @@ def write_results(movies, start_date: date, end_date: date, page: int):
     Write the results to a file.
     """
     os.makedirs("tmdb_dump", exist_ok=True)
-    filename = f"tmdb_dump/{start_date.isoformat()}_{end_date.isoformat()}_page_{page}.json"
+    filename = f"tmdb_dump/{start_date.isoformat()}_{end_date.isoformat()}_page_{page:03}.json"
     with open(filename, "w") as f:
-        f.write(json.dumps(utils.as_dict(movies)))
+        f.write(json.dumps(movies))
 
-async def main():
-    tmdb = aioTMDb()
-
-    # Earliest movie release date in TMDb is 1874-12-09
-    start_date = date(1874, 1, 1)
+async def discover_movies_from(session, start_date: date):
     results = []
     coros = []
-    
+
     while start_date < date.today():
         # Check the number of movies released in the date range
         # and reduce the date range until it's less than 500
         end_date = date.today()
         while True:
 
-            movies = await tmdb.discover().movie(
-                sort_by="primary_release_date.asc",
-                primary_release_date__gte=start_date.isoformat(),
-                primary_release_date__lte=end_date.isoformat())
+            params = {
+                "sort_by": "primary_release_date.asc",
+                "primary_release_date.gte": start_date.isoformat(),
+                "primary_release_date.lte": end_date.isoformat()
+            }
+            async with session.get(url, params=params, headers=headers) as response:
+                movies = await response.json()
             
-            if movies.total_pages and movies.total_pages < 500:
+            if 'total_pages' in movies and movies['total_pages'] < 500:
+                print(f"Found {movies['total_results']} movies from {start_date.isoformat()} to {end_date.isoformat()}")
+                write_results(movies, start_date, end_date, 1)
                 break
 
             # Reduce the date range by half
@@ -74,12 +83,20 @@ async def main():
 
         results.append(movies)
         coros.extend([
-            discover_movies(tmdb, start_date, end_date, page)
-            for page in range(2, (movies.total_pages or 1) + 1)
+            discover_movies(session, start_date, end_date, page)
+            for page in range(2, (movies['total_pages']) + 1)
         ])
         start_date = end_date
 
     results.extend(await asyncio.gather(*coros))
+
+async def main():
+    
+    # Earliest movie release date in TMDb is 1874-12-09
+    start_date = date(1874, 1, 1)
+    async with aiohttp.ClientSession() as session:
+        await discover_movies_from(session, start_date)
+   
     print("Done!")
 
 if __name__ == "__main__":
