@@ -3,12 +3,7 @@ import aiohttp
 from datetime import date
 import os
 import json
-
-url = "https://api.themoviedb.org/3/discover/movie"
-headers = {
-    "Accept": "application/json",
-    "Authorization": "Bearer " + os.getenv("TMDB_TOKEN", "")
-}
+import random
 
 async def discover_movies(session, start_date: date, end_date: date, page: int = 1):
     """
@@ -18,7 +13,7 @@ async def discover_movies(session, start_date: date, end_date: date, page: int =
         print(f"> Starting {start_date.isoformat()} to {end_date.isoformat()}: Page {page}")
     
     movies = None
-    wait_secs = 0
+    tries = 1
     while movies is None:
         try:
             params = {
@@ -27,11 +22,15 @@ async def discover_movies(session, start_date: date, end_date: date, page: int =
                 "primary_release_date.lte": end_date.isoformat(),
                 "page": page
             }
-            async with session.get(url, params=params, headers=headers) as response:
+            async with session.get(params=params) as response:
                 movies = await response.json()
         except Exception as e:
             print(e)
-            wait_secs += 1
+            
+            # If we encounter an error, we will retry with exponential backoff
+            jitter = random.random()
+            wait_secs = (2 ** tries) + jitter
+            tries += 1
             await asyncio.sleep(wait_secs)
 
     if (page % 50 == 0):
@@ -69,7 +68,7 @@ async def discover_movies_from(session, start_date: date):
                 "primary_release_date.gte": start_date.isoformat(),
                 "primary_release_date.lte": end_date.isoformat()
             }
-            async with session.get(url, params=params, headers=headers) as response:
+            async with session.get(params=params) as response:
                 movies = await response.json()
             
             if 'total_pages' in movies and movies['total_pages'] < 500:
@@ -91,10 +90,15 @@ async def discover_movies_from(session, start_date: date):
     results.extend(await asyncio.gather(*coros))
 
 async def main():
-    
+    url = "https://api.themoviedb.org/3/discover/movie"
+    headers = {
+        "Accept": "application/json",
+        "Authorization": "Bearer " + os.getenv("TMDB_TOKEN", "")
+    }
+
     # Earliest movie release date in TMDb is 1874-12-09
     start_date = date(1874, 1, 1)
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(url, headers=headers) as session:
         await discover_movies_from(session, start_date)
    
     print("Done!")
